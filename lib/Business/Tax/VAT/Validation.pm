@@ -171,8 +171,11 @@ sub new {
             SK => '[0-9]{10}',
         },
         proxy        => $arg{-proxy},
-        informations => {}
+        informations => {},
+        ua           => LWP::UserAgent->new,
     };
+    $self->{ua}->agent( 'Business::Tax::VAT::Validation/'. $Business::Tax::VAT::Validation::VERSION );
+
     $self = bless $self, $class;
     $self->{members} = join( '|', keys %{ $self->{re} } );
     $self;
@@ -243,20 +246,19 @@ sub check {
     $countryCode ||= '';
     ( $vatNumber, $countryCode ) = $self->_format_vatn( $vatNumber, $countryCode );
     if ($vatNumber) {
-        my $ua = LWP::UserAgent->new;
+        
         if ( ref $self->{proxy} eq 'ARRAY' ) {
-            $ua->proxy( @{ $self->{proxy} } );
+            $self->{ua}->proxy( @{ $self->{proxy} } );
         } else {
-            $ua->env_proxy;
+            $self->{ua}->env_proxy;
         }
-        $ua->agent( 'Business::Tax::VAT::Validation/'. $Business::Tax::VAT::Validation::VERSION );
         
         my $request = HTTP::Request->new(POST => $self->{baseurl});
         $request->header(SOAPAction => 'http://www.w3.org/2003/05/soap-envelope');
         $request->content(_in_soap_envelope($vatNumber, $countryCode));
         $request->content_type("Content-Type: application/soap+xml; charset=utf-8");
         
-        my $response = $ua->request($request);
+        my $response = $self->{ua}->request($request);
         
         return $countryCode . '-' . $vatNumber if $self->_is_res_ok( $response->code, $response->decoded_content );
     }
