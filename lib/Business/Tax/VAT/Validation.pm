@@ -1,9 +1,15 @@
- package Business::Tax::VAT::Validation;
+package Business::Tax::VAT::Validation;
+=pod
+
+=encoding UTF-8
+
+=cut
+
  ############################################################################
 # IT Development software                                                    #
-# European VAT number validator Version 0.19                                 #
-# Copyright 2003 Nauwelaerts B  bpn#it-development%be                        #
-# Created 06/08/2003            Last Modified 29/04/2008                     #
+# European VAT number validator Version 1.0.2                                #
+# Copyright 2003 Nauwelaerts B  bpgn@cpan.org                                #
+# Created 06/08/2003            Last Modified 30/11/2012                     #
  ############################################################################
 # COPYRIGHT NOTICE                                                           #
 # Copyright 2003 Bernard Nauwelaerts  All Rights Reserved.                   #
@@ -12,13 +18,27 @@
 # Please see COPYING for details                                             #
 #                                                                            #
 # DISCLAIMER                                                                 #
-#  As usually with GNU software, this one is provided as is,                 # 
+#  As usual with GNU software, this one is provided as is,                   #
 #  WITHOUT ANY WARRANTY, without even the implied warranty of                #
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.                      #
 #                                                                            #
  ############################################################################
 # Revision history (dd/mm/yyyy) :                                            #
 #                                                                            #
+# 1.02   30/11/2012; Fix POD typo; Thanks to Gregor Herrmann                 #
+# 1.01   28/11/2012; Fix POD UTF8 Issue; Thanks to Graham Knop               #
+# 1.00   25/03/2012; This module now uses the VIES SOAP interface.           #
+#                    Add get_informations method                             #
+# 0.24   06/03/2012; Fix traderName field required for EL and ES MS          #
+#                    Update POST request fields                              #
+# 0.23   29/02/2012; Fix regexp in _is_res_ok with multiline regexp          #
+#                    (Thanks to Bart Heupers)                                #
+# 0.22   04/10/2011; Typo fix in POD error message #2                        #
+#                    (Thanks to Martin H. Sluka)                             #
+#                    Minor POD fixes (BPGN)                                  #
+#                    Fix subs args bug (performance fix) (BPGN)              #
+# 0.21   04/08/2009; New error status 19: EU database too busy               #
+#                    (Martin H. Sluka)                                       #
 # 0.20   18/08/2008; VIES HTML changes: now allowing multiples spaces        #
 #                    (Thanks to Simon Williams, Benoît Galy & Raluca Boboia) #
 # 0.19   29/04/2008; HU regexp: missing digit "9" added                      #
@@ -38,14 +58,14 @@
 #                    Updated regexps according to the actual VIES FAQ        #
 #                    Some slight documentation improvements                  #
 #                    Improved tests: each regexp is tested accordind to FAQ  #
-# 0.13   16/01/2007; VIES interface changed "not found" layout               # 
-#                    (Thanks to Tom Kirkpatrick for this update)	         #
-# 0.12   10/11/2006; YAML Compliance		                                 # 
-# 0.11   10/11/2006; Minor bug allowing one forbidden character              # 
-#                    corrected in Belgian regexp                             # 
-#		             (Thanks to Andy Wardley for this report)                #
-#                    + added regular_expressions property                    # 
-#                      for external testing purposes                         #  
+# 0.13   16/01/2007; VIES interface changed "not found" layout               #
+#                    (Thanks to Tom Kirkpatrick for this update)             #
+# 0.12   10/11/2006; YAML Compliance                                         #
+# 0.11   10/11/2006; Minor bug allowing one forbidden character              #
+#                    corrected in Belgian regexp                             #
+#                     (Thanks to Andy Wardley for this report)               #
+#                    + added regular_expressions property                    #
+#                      for external testing purposes                         #
 # 0.10   20/07/2006; Adding Test::Pod to test suite                          #
 # 0.09   20/06/2006; local_check method allows you to test VAT numbers       #
 #                    without asking the EU database. Based on regexps.       #
@@ -53,10 +73,10 @@
 #                    From 31/12/2007, only 10 digits will be valid           #
 # 0.07   25/05/2006; Now we use "request" method not "simple request"        #
 #                    in order to follow potential redirects                  #
-# 0.06   25/05/2006; Changed $baseurl					                     #
-#                    (Thanks to Torsten Mueller for this update)	         #
-# 0.05   19/01/2006; Adding support for proxy settings			             #
-#                    (Thanks to Tom Kirkpatrick for this update)	         #
+# 0.06   25/05/2006; Changed $baseurl                                        #
+#                    (Thanks to Torsten Mueller for this update)             #
+# 0.05   19/01/2006; Adding support for proxy settings                       #
+#                    (Thanks to Tom Kirkpatrick for this update)             #
 # 0.04   01/11/2004; Adding support for error "Member Service Unavailable"   #
 # 0.03   01/11/2004; Adding 10 new members.                                  #
 #                    (Thanks to Robert Alloway for this update)              #
@@ -68,7 +88,7 @@
 use strict;
 
 BEGIN {
-    $Business::Tax::VAT::Validation::VERSION = "0.20";
+    $Business::Tax::VAT::Validation::VERSION = '1.02';
     use HTTP::Request::Common qw(POST);
     use LWP::UserAgent;
 }
@@ -92,9 +112,9 @@ Business::Tax::VAT::Validation - A class for european VAT numbers validation.
   
 =head1 DESCRIPTION
 
-This class provides you a easy api to check validity of european VAT numbers (if the provided number exists).
+This class provides an easy api to check european VAT numbers' syntax, and if they has been registered by the competent authorities.
 
-It asks the EU database for this. 
+It asks the EU database (VIES) for this, using its SOAP interface methods. 
 
 
 =head1 CONSTRUCTOR
@@ -105,57 +125,56 @@ It asks the EU database for this.
 
     $hvatn=Business::Tax::VAT::Validation->new();
     
+    
     If your system is located behind a proxy :
     
     $hvatn=Business::Tax::VAT::Validation->new(-proxy => ['http', 'http://example.com:8001/']);
     
-    Note : 
+    Note : See LWP::UserAgent for proxy options.
 
 =cut
 
 sub new {
-    my $class   = shift;
-    my %arg     = @_;
+    my ( $class, %arg ) = @_;
     my $self = {
-        #baseurl  => 'http://europa.eu.int/comm/taxation_customs/vies/cgi-bin/viesquer', # Obsolete since v0.06
-        #baseurl  => 'http://ec.europa.eu/taxation_customs/vies/cgi-bin/viesquer',       # Obsolete since v0.14
-        baseurl    => 'http://ec.europa.eu/taxation_customs/vies/viesquer.do',
-        error      =>    '',
-        error_code => 0,
-        re         => {
-        ### t/01_localcheck.t tests if these regexps accepts all regular VAT numbers, according to VIES FAQ
-            AT      =>  'U[0-9]{8}',
-            BE      =>  '0[0-9]{9}',
-            BG      =>  '[0-9]{9,10}',
-            CY      =>  '[0-9]{8}[A-Za-z]',
-            CZ	    =>  '[0-9]{8,10}',
-            DE      =>  '[0-9]{9}',
-            DK      =>  '[0-9]{2} ?[0-9]{2} ?[0-9]{2} ?[0-9]{2}',
-            EE	    =>  '[0-9]{9}',
-            EL      =>  '[0-9]{9}',
-            ES      =>  '([A-Za-z0-9][0-9]{7}[A-Za-z0-9])',
-            FI      =>  '[0-9]{8}',
-            FR      =>  '[A-Za-z0-9]{2} ?[0-9]{9}',
-            GB      =>  '([0-9]{3} ?[0-9]{4} ?[0-9]{2}|[0-9]{3} ?[0-9]{4} ?[0-9]{2} ?[0-9]{3}|GD[0-9]{3}|HA[0-9]{3})',
-            HU      =>  '[0-9]{8}',
-            IE      =>  '[0-9][A-Za-z0-9\+\*][0-9]{5}[A-Za-z]',
-            IT      =>  '[0-9]{11}',
-            LT      =>  '([0-9]{9}|[0-9]{12})',
-            LU      =>  '[0-9]{8}',
-            LV      =>  '[0-9]{11}',
-            MT	    =>  '[0-9]{8}',
-            NL      =>  '[0-9]{9}B[0-9]{2}',
-            PL      =>  '[0-9]{10}',
-            PT      =>  '[0-9]{9}',
-            RO      =>  '[0-9]{2,10}',
-            SE      =>  '[0-9]{12}',
-            SI	    =>  '[0-9]{8}',
-            SK	    =>  '[0-9]{10}',
+        baseurl      => $arg{baseurl} || 'http://ec.europa.eu/taxation_customs/vies/services/checkVatService',
+        error        => '',
+        error_code   => 0,
+        re           => {
+            ### t/01_localcheck.t tests if these regexps accepts all regular VAT numbers, according to VIES FAQ
+            AT => 'U[0-9]{8}',
+            BE => '0[0-9]{9}',
+            BG => '[0-9]{9,10}',
+            CY => '[0-9]{8}[A-Za-z]',
+            CZ => '[0-9]{8,10}',
+            DE => '[0-9]{9}',
+            DK => '[0-9]{2} ?[0-9]{2} ?[0-9]{2} ?[0-9]{2}',
+            EE => '[0-9]{9}',
+            EL => '[0-9]{9}',
+            ES => '([A-Za-z0-9][0-9]{7}[A-Za-z0-9])',
+            FI => '[0-9]{8}',
+            FR => '[A-Za-z0-9]{2} ?[0-9]{9}',
+            GB => '([0-9]{3} ?[0-9]{4} ?[0-9]{2}|[0-9]{3} ?[0-9]{4} ?[0-9]{2} ?[0-9]{3}|GD[0-9]{3}|HA[0-9]{3})',
+            HU => '[0-9]{8}',
+            IE => '[0-9][A-Za-z0-9\+\*][0-9]{5}[A-Za-z]',
+            IT => '[0-9]{11}',
+            LT => '([0-9]{9}|[0-9]{12})',
+            LU => '[0-9]{8}',
+            LV => '[0-9]{11}',
+            MT => '[0-9]{8}',
+            NL => '[0-9]{9}B[0-9]{2}',
+            PL => '[0-9]{10}',
+            PT => '[0-9]{9}',
+            RO => '[0-9]{2,10}',
+            SE => '[0-9]{12}',
+            SI => '[0-9]{8}',
+            SK => '[0-9]{10}',
         },
-        proxy => $arg{-proxy}
+        proxy        => $arg{-proxy},
+        informations => {}
     };
     $self = bless $self, $class;
-    $self->{members}=join('|', keys %{$self->{re}});
+    $self->{members} = join( '|', keys %{ $self->{re} } );
     $self;
 }
 
@@ -172,28 +191,27 @@ sub new {
 =cut
 
 sub member_states {
-    my $self=shift;
-    (keys %{$self->{re}})
+    ( keys %{ $_[0]->{re} } );
 }
 
 =item B<regular_expressions> - Returns a hash list containing one regular expression for each country
 
-If you want to test a VAT number format ouside this module, eg. embedded as javascript in web form.
+If you want to test a VAT number format ouside this module, e.g. embedded as javascript in a web form.
 
     %re=$hvatn->regular_expressions;
 
 returns
 
     (
-	AT      =>  'U[0-9]{8}',
-	...
-	SK	    =>  '[0-9]{10}',
+    AT      =>  'U[0-9]{8}',
+    ...
+    SK        =>  '[0-9]{10}',
     );
 
 =cut
 
 sub regular_expressions {
-    (%{shift->{re}})
+    ( %{ $_[0]->{re} } );
 }
 
 =back
@@ -204,12 +222,12 @@ sub regular_expressions {
 
 =over 4
 
-=item B<check> - Checks if a VAT number exists into the VIES database
+=item B<check> - Checks if a VAT number exists in the VIES database
     
-    $ok=$hvatn->check($VAT, [$member_state]);
+    $ok=$hvatn->check($vatNumber, [$countryCode]);
 
 You may either provide the VAT number under its complete form (e.g. BE-123456789, BE123456789)
-or either specify VAT and MS (member state) individually.
+or specify the VAT and MSC (vatNumber and countryCode) individually.
 
 Valid MS values are :
 
@@ -220,48 +238,65 @@ Valid MS values are :
 =cut
 
 sub check {
-    my $self=shift;
-    my $vatn=shift || return $self->_set_error('You must provide a VAT number');
-    my $mscc=shift || '';
-    ($vatn, $mscc)=$self->_format_vatn($vatn, $mscc);
-    if ($vatn) {
+    my ($self, $vatNumber, $countryCode, @other) = @_;    # @other is here for backward compatibility purposes
+    return $self->_set_error('You must provide a VAT number') unless $vatNumber;
+    $countryCode ||= '';
+    ( $vatNumber, $countryCode ) = $self->_format_vatn( $vatNumber, $countryCode );
+    if ($vatNumber) {
         my $ua = LWP::UserAgent->new;
-        if (ref $self->{proxy} eq 'ARRAY') {
-            $ua->proxy(@{$self->{proxy}});
+        if ( ref $self->{proxy} eq 'ARRAY' ) {
+            $ua->proxy( @{ $self->{proxy} } );
         } else {
             $ua->env_proxy;
         }
-        $ua->agent('Business::Tax::VAT::Validation/'.$Business::Tax::VAT::Validation::VERSION);
-        my $req = POST $self->{baseurl},
-        [
-            'selectedLanguage'        => 'EN',
-            'ms'                      => $mscc ,
-            'vat'                     => $vatn ,
-            'iso'                     => $mscc ,
-        ];
-        return $mscc.'-'.$vatn if $self->_is_res_ok($ua->request($req)->as_string);
+        $ua->agent( 'Business::Tax::VAT::Validation/'. $Business::Tax::VAT::Validation::VERSION );
+        
+        my $request = HTTP::Request->new(POST => $self->{baseurl});
+        $request->header(SOAPAction => 'http://www.w3.org/2003/05/soap-envelope');
+        $request->content(_in_soap_envelope($vatNumber, $countryCode));
+        $request->content_type("Content-Type: application/soap+xml; charset=utf-8");
+        
+        my $response = $ua->request($request);
+        
+        return $countryCode . '-' . $vatNumber if $self->_is_res_ok( $response->code, $response->decoded_content );
     }
     0;
 }
 
-
 =item B<local_check> - Checks if a VAT number format is valid
+    This method is based on regexps only and DOES NOT ask the VIES database
     
     $ok=$hvatn->local_check($VAT, [$member_state]);
     
-    This method is based on regexps only and DOES NOT asks the VIES database
 
 =cut
 
 sub local_check {
-    my $self=shift;
-    my $vatn=shift || return $self->_set_error('You must provide a VAT number');
-    my $mscc=shift || '';
-    ($vatn, $mscc)=$self->_format_vatn($vatn, $mscc);
+    my ( $self, $vatn, $mscc, @other ) = @_;    # @other is here for backward compatibility purposes
+    return $self->_set_error('You must provide a VAT number') unless $vatn;
+    $mscc ||= '';
+    ( $vatn, $mscc ) = $self->_format_vatn( $vatn, $mscc );
     if ($vatn) {
-        return 1
+        return 1;
+    }
+    else {
+        return 0;
+    }
+}
+
+=item B<informations> - Returns informations related to the last validated VAT number
+    
+    %infos=$hvatn->informations();
+    
+
+=cut
+
+sub informations {
+    my ( $self, $key, @other ) = @_; 
+    if ($key) {
+        return $self->{informations}{$key} 
     } else {
-        return 0
+        return ($self->{informations})    
     }
 }
 
@@ -277,13 +312,16 @@ Possible errors are :
 =over 4
 
 =item *
-  0  Unknown MS code : Internal checkup failed (Specified Member State does not exists)
+ -1  The provided VAT number is valid.
+
+=item *
+  0  Unknown MS code : Internal checkup failed (Specified Member State does not exist)
 
 =item *
   1  Invalid VAT number format : Internal checkup failed (bad syntax)
 
 =item *
-  2  This VAT number doesn't exists in EU database : distant checkup
+  2  This VAT number doesn't exist in EU database : distant checkup
 
 =item *
   3  This VAT number contains errors : distant checkup
@@ -295,7 +333,21 @@ Possible errors are :
  18  Member Sevice Unavailable: The EU database is unable to reach the requested member's database.
 
 =item *
+ 19  The EU database is too busy.
+
+=item *
+ 20  Connexion to the VIES database failed.
+
+=item *
+ 21  The VIES interface failed to parse a stream. This error occurs unpredictabely, so you should retry your validation request.
+
+=item *
 257  Invalid response, please contact the author of this module. : This normally only happens if this software doesn't recognize any valid pattern into the response document: this generally means that the database interface has been modified, and you'll make the author happy by submitting the returned response !!!
+
+=item *
+500  The VIES server encountered an internal server error.
+Error 500 : soap:Server TIMEOUT
+Error 500 : soap:Server MS_UNAVAILABLE
 
 =back
 
@@ -305,87 +357,135 @@ If error_code > 256, you should temporarily accept the provided number, contact 
 =cut
 
 sub get_last_error {
-    shift->{error};
+    $_[0]->{error};
 }
 
 sub get_last_error_code {
-    shift->{error_code};
+    $_[0]->{error_code};
 }
 
 ### PRIVATE FUNCTIONS ==========================================================
 sub _format_vatn {
-    my $self=shift;
-    my $vatn=shift;
-    my $mscc=shift;
-    my $null='';
-    $vatn=~s/\-/ /g; $vatn=~s/\./ /g; $vatn=~s/\s+/ /g;
-    if (!$mscc && $vatn=~s/^($self->{members}) ?/$null/e) {
-        $mscc=$1;
+    my ( $self, $vatn, $mscc ) = @_;
+    my $null = '';
+    $vatn =~ s/\-/ /g;
+    $vatn =~ s/\./ /g;
+    $vatn =~ s/\s+/ /g;
+    if ( !$mscc && $vatn =~ s/^($self->{members}) ?/$null/e ) {
+        $mscc = $1;
     }
-    return $self->_set_error(0, "Unknown MS code") if $mscc!~m/^($self->{members})$/;
-    my $re=$self->{re}{$mscc};
-    return $self->_set_error(1, "Invalid VAT number format") if $vatn!~m/^$re$/;
-    ($vatn, $mscc);
+    return $self->_set_error( 0, "Unknown MS code" )
+      if $mscc !~ m/^($self->{members})$/;
+    my $re = $self->{re}{$mscc};
+    return $self->_set_error( 1, "Invalid VAT number format" )
+      if $vatn !~ m/^$re$/;
+    ( $vatn, $mscc );
+}
+
+sub _in_soap_envelope {
+    my ($vatNumber, $countryCode)=@_;
+    '<?xml version="1.0" encoding="UTF-8"?>
+<SOAP-ENV:Envelope
+     SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"
+     xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/"
+     xmlns:xsi="http://www.w3.org/1999/XMLSchema-instance"
+     xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"
+     xmlns:xsd="http://www.w3.org/1999/XMLSchema">
+     <SOAP-ENV:Body>
+     <checkVat xmlns="urn:ec.europa.eu:taxud:vies:services:checkVat:types">
+     <countryCode>'.$countryCode.'</countryCode>
+     <vatNumber>'.$vatNumber.'</vatNumber>
+     </checkVat>
+     </SOAP-ENV:Body>
+     </SOAP-ENV:Envelope>'
 }
 
 sub _is_res_ok {
-    my $self=shift;
-    my $res=shift;
-    if ($res=~/^(\d{3}) (.*)/) {
-        return $self->_set_error($1, $2)
-    }
-    $res=~s/[\r\n]//; $res=~s/>/>\n/;
-    foreach (split(/\n/, $res)) {
-        next unless $_;
-        if (/^\s*No\, invalid VAT number/) {
-            return $self->_set_error(2, "This VAT number doesn't exists in EU database.")
-        } elsif (/^\s*Error\: (.*)$/) {
-            return $self->_set_error(3, "This VAT number contains errors: ".$1)
-        } elsif (/Request time-out\. Please re-submit your request later/){
-			return $self->_set_error(17, "Time out connecting to the database")
-        } elsif (/^\s*Member State service unavailable/) {
-            return $self->_set_error(18, "Member State service unavailable: Please re-submit your request later.")
+    my ( $self, $code, $res ) = @_;
+    $self->{informations}={};
+    $res=~s/[\r\n]/ /g;
+    if ($code == 200) {
+        if ($res=~m/<valid> *(.*?) *<\/valid>/) {
+            my $v = $1;
+            if ($v eq 'true' || $v eq '1') {
+                if ($res=~m/<name> *(.*?) *<\/name>/) {
+                    $self->{informations}{name} = $1
+                }
+                if ($res=~m/<address> *(.*?) *<\/address>/) {
+                    $self->{informations}{address} = $1
+                }
+                $self->_set_error( -1, 'Valid VAT Number');
+                return 1;
+            } else {
+                return $self->_set_error( 2, 'Invalid VAT Number ('.$v.')');
+            }
+        } else {
+            return $self->_set_error( 257, "Invalid response, please contact the author of this module. " . $res );
         }
-        return 1 if /^\s*Yes\, valid VAT number\s*$/;
+    } else {
+        if ($res=~m/<faultcode> *(.*?) *<\/faultcode> *<faultstring> *(.*?) *<\/faultstring>/) {
+            my $faultcode   = $1;
+            my $faultstring = $2;
+            if ($faultcode eq 'soap:Server' && $faultstring eq 'TIMEOUT') {
+                return $self->_set_error(17, "The VIES server timed out. Please re-submit your request later.")
+            } elsif ($faultcode eq 'soap:Server' && $faultstring eq 'MS_UNAVAILABLE') {
+                return $self->_set_error(18, "Member State service unavailable. Please re-submit your request later.")
+            } elsif ($faultstring=~m/^Couldn't parse stream/) {
+        	    return $self->_set_error( 21, "The VIES database failed to parse a stream. Please re-submit your request later." );
+            } else {
+                return $self->_set_error( $code, $1.' '.$2 )
+            }
+        } elsif ($res=~m/^Can't connect to/) {
+        	return $self->_set_error( 20, "Connexion to the VIES database failed. " . $res );
+        } else {
+            return $self->_set_error( 257, "Invalid response [".$code."], please contact the author of this module. " . $res );
+        }
     }
-    $self->_set_error(257, "Invalid response, please contact the author of this module. ".$res)
 }
 
 sub _set_error {
-    my ($self, $code, $txt)=@_;
-    $self->{error_code}=$code;
-    $self->{error}=$txt;
-    undef
+    my ( $self, $code, $txt ) = @_;
+    $self->{error_code} = $code;
+    $self->{error}      = $txt;
+    undef;
 }
+
 =back
 
-=head1 Why not SOAP ?
+=head1 SEE ALSO
 
-Just because this module's author wasn't given such time to do so. The SOAP module available at CPAN at time of writing is farly too complex to be used here, simple tasks having to be simply performed.
+LWP::UserAgent
 
-
-=head1 Other documentation
-
-Jetez un oeil sur I<http://www.it-development.be/software/PERL/Business-Tax-VAT-Validation/> pour la documentation en français.
+I<http://ec.europa.eu/taxation_customs/vies/faqvies.do> for the FAQs related to the VIES service.
 
 
-=head1 Feedback
+=head1 FEEDBACK
 
-If you find this module useful, or have any comments, suggestions or improvements, please let me know.
+If you find this module useful, or have any comments, suggestions or improvements, feel free to let me know.
 
 
 =head1 AUTHOR
 
-Bernard Nauwelaerts <bpn#it-development%be>
+Bernard Nauwelaerts <bpgn@cpan.org>
 
 
-=head1 Credits
+=head1 CREDITS
 
-Many thanks to the following people, actively involved in this software development by submitting patches, bug reports, new members regexps, VIES interface changes,... :
-
-Sorted by last intervention :
+Many thanks to the following people, actively involved in the development of this software by submitting patches, bug reports, new members regexps, VIES interface changes,... (sorted by last intervention) :
 
 =over 4
+
+=item *
+Gregor Herrmann, Debian.
+
+=item *
+Graham Knop.
+
+=item *
+Bart Heupers, Netherlands.
+
+=item *
+Martin H. Sluka, noris network AG, Germany.
 
 =item *
 Simon Williams, UK2 Limited, United Kingdom & Benoît Galy, Greenacres, France & Raluca Boboia, Evozon, Romania
@@ -412,10 +512,10 @@ Torsten Mueller, Archesoft, Germany
 
 =head1 LICENSE
 
-GPL. Enjoy! See COPYING for further informations on the GPL.
+GPL. Enjoy! See COPYING for further information on the GPL.
 
 
-=head1 Disclaimer
+=head1 DISCLAIMER
 
 See I<http://ec.europa.eu/taxation_customs/vies/viesdisc.do> to known the limitations of the EU validation service.
 
@@ -423,4 +523,5 @@ See I<http://ec.europa.eu/taxation_customs/vies/viesdisc.do> to known the limita
   without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 =cut
+
 1;
